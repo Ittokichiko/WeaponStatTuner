@@ -1,14 +1,12 @@
 using System;
 using System.Collections.Generic;
 using Oxide.Core;
-using Oxide.Core.Plugins;
-using Oxide.Game.Rust.Cui;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("WeaponStatTuner", "Ittokichiko", "2.5.0")]
-    [Description("Override weapon stats (damage, fire rate, projectile speed, mag size, spread) via config or commands.")]
+    [Info("WeaponStatTuner", "Ittokichiko", "1.3.0")]
+    [Description("Override weapon stats via config or commands.")]
     public class WeaponStatTuner : RustPlugin
     {
         private const string permUse = "weaponstattuner.use";
@@ -57,7 +55,7 @@ namespace Oxide.Plugins
         private void Init()
         {
             permission.RegisterPermission(permUse, this);
-            AddCovalenceCommand("tune", "CmdTune");
+            cmd.AddChatCommand("tune", this, nameof(CmdTune));
         }
 
         private void OnActiveItemChanged(BasePlayer player, Item oldItem, Item newItem)
@@ -69,53 +67,34 @@ namespace Oxide.Plugins
         private void OnItemAddedToContainer(ItemContainer container, Item item)
         {
             if (container?.parent == null || item == null) return;
-            timer.Once(0f, () => ApplyWeaponTuning(container.parent));
-        }
-
-        private void OnItemRemovedFromContainer(ItemContainer container, Item item)
-        {
-            if (container?.parent == null || item == null) return;
-            timer.Once(0f, () => ApplyWeaponTuning(container.parent));
+            timer.Once(0f, () => ApplyWeaponTuning(item));
         }
         #endregion
 
         #region Logic
-        private bool TryGetBaseProjectile(Item item, out BaseProjectile bp)
-        {
-            bp = null;
-            if (item == null) return false;
-            var ent = item.GetHeldEntity() as BaseProjectile;
-            if (ent == null || ent.IsDestroyed) return false;
-            bp = ent;
-            return true;
-        }
-
         private void ApplyWeaponTuning(Item item)
         {
-            if (!TryGetBaseProjectile(item, out var bp)) return;
-            if (bp.primaryMagazine == null || bp.primaryMagazine.ammoType == null) return;
-
+            if (item == null) return;
             string shortname = item.info?.shortname ?? "";
-            if (string.IsNullOrEmpty(shortname)) return;
-
             if (!_config.Weapons.TryGetValue(shortname, out var tuning)) return;
 
+            var bp = item.GetHeldEntity() as BaseProjectile;
+            if (bp == null) return;
+
             // DAMAGE
-            if (tuning.Damage.HasValue && bp.primaryMagazine.ammoType.damageTypes != null)
-            {
-                bp.primaryMagazine.ammoType.damageTypes.Set(Rust.DamageType.Bullet, tuning.Damage.Value);
-            }
+            if (tuning.Damage.HasValue)
+                bp.damageScale = tuning.Damage.Value; // Set damage directly on BaseProjectile
 
             // FIRE RATE
             if (tuning.FireRate.HasValue)
                 bp.repeatDelay = tuning.FireRate.Value;
 
             // PROJECTILE SPEED
-            if (tuning.ProjectileSpeed.HasValue && bp.primaryMagazine.ammoType.projectileVelocity > 0f)
-                bp.projectileVelocityScale = tuning.ProjectileSpeed.Value / bp.primaryMagazine.ammoType.projectileVelocity;
+            if (tuning.ProjectileSpeed.HasValue)
+                bp.projectileVelocityScale = tuning.ProjectileSpeed.Value; // Directly set speed scale
 
             // MAGAZINE SIZE
-            if (tuning.MagazineSize.HasValue)
+            if (tuning.MagazineSize.HasValue && bp.primaryMagazine != null)
                 bp.primaryMagazine.capacity = tuning.MagazineSize.Value;
 
             // SPREAD / PERFECT ACCURACY
@@ -135,17 +114,17 @@ namespace Oxide.Plugins
         #endregion
 
         #region Commands
-        private void CmdTune(IPlayer player, string command, string[] args)
+        private void CmdTune(BasePlayer player, string command, string[] args)
         {
-            if (!player.HasPermission(permUse))
+            if (!permission.UserHasPermission(player.UserIDString, permUse))
             {
-                player.Reply("You don’t have permission to use this.");
+                SendReply(player, "You don’t have permission to use this.");
                 return;
             }
 
             if (args.Length == 0)
             {
-                player.Reply("Usage: /tune <weapon> <stat> <value>\n/tune list <weapon>\n/tune reset <weapon>\n/tune resetall");
+                SendReply(player, "Usage: /tune <weapon> <stat> <value>\n/tune list <weapon>\n/tune reset <weapon>\n/tune resetall");
                 return;
             }
 
@@ -156,18 +135,18 @@ namespace Oxide.Plugins
             {
                 if (args.Length < 2)
                 {
-                    player.Reply("Usage: /tune list <weapon_shortname>");
+                    SendReply(player, "Usage: /tune list <weapon_shortname>");
                     return;
                 }
 
                 string weapon = args[1];
                 if (!_config.Weapons.TryGetValue(weapon, out var tuning))
                 {
-                    player.Reply($"No overrides set for {weapon}");
+                    SendReply(player, $"No overrides set for {weapon}");
                     return;
                 }
 
-                player.Reply($"[WeaponStatTuner] Stats for {weapon}:\n" +
+                SendReply(player, $"[WeaponStatTuner] Stats for {weapon}:\n" +
                     $"- Damage: {tuning.Damage?.ToString() ?? "default"}\n" +
                     $"- FireRate: {tuning.FireRate?.ToString() ?? "default"}\n" +
                     $"- ProjectileSpeed: {tuning.ProjectileSpeed?.ToString() ?? "default"}\n" +
@@ -182,7 +161,7 @@ namespace Oxide.Plugins
             {
                 if (args.Length < 2)
                 {
-                    player.Reply("Usage: /tune reset <weapon_shortname>");
+                    SendReply(player, "Usage: /tune reset <weapon_shortname>");
                     return;
                 }
 
@@ -190,11 +169,11 @@ namespace Oxide.Plugins
                 if (_config.Weapons.Remove(weapon))
                 {
                     SaveConfig();
-                    player.Reply($"[WeaponStatTuner] Reset stats for {weapon} to default.");
+                    SendReply(player, $"[WeaponStatTuner] Reset stats for {weapon} to default.");
                 }
                 else
                 {
-                    player.Reply($"[WeaponStatTuner] No overrides were set for {weapon}.");
+                    SendReply(player, $"[WeaponStatTuner] No overrides were set for {weapon}.");
                 }
                 return;
             }
@@ -205,14 +184,14 @@ namespace Oxide.Plugins
                 _config.Weapons.Clear();
                 _config.ForcePerfectAccuracy = false;
                 SaveConfig();
-                player.Reply("[WeaponStatTuner] All weapon overrides reset to default.");
+                SendReply(player, "[WeaponStatTuner] All weapon overrides reset to default.");
                 return;
             }
 
             // SET STAT
             if (args.Length < 3)
             {
-                player.Reply("Usage: /tune <weapon_shortname> <stat> <value>");
+                SendReply(player, "Usage: /tune <weapon_shortname> <stat> <value>");
                 return;
             }
 
@@ -246,12 +225,12 @@ namespace Oxide.Plugins
                     if (bool.TryParse(valStr, out var perfect)) _config.ForcePerfectAccuracy = perfect;
                     break;
                 default:
-                    player.Reply("Unknown stat. Use: damage, firerate, speed, magsize, spread, perfect");
+                    SendReply(player, "Unknown stat. Use: damage, firerate, speed, magsize, spread, perfect");
                     return;
             }
 
             SaveConfig();
-            player.Reply($"[WeaponStatTuner] {weaponName} {stat} set to {valStr}");
+            SendReply(player, $"[WeaponStatTuner] {weaponName} {stat} set to {valStr}");
         }
         #endregion
     }
